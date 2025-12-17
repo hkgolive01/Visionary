@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Optix - 專業鏡頭檢視器</title>
+    <style>
+        :root {
+            --primary-color: #3b82f6;
+            --bg-overlay: rgba(30, 30, 30, 0.65);
+            --text-color: #ffffff;
+            --border-radius: 12px;
+            --transition-speed: 0.4s;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #000;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            user-select: none;
+        }
+
+        #video-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #000;
+            overflow: hidden;
+            cursor: default;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            transform-origin: center center;
+            transition: transform 0.1s linear;
+            will-change: transform;
+        }
+
+        .grabbable { cursor: grab; }
+        .grabbing {
+            cursor: grabbing !important;
+            transition: none !important;
+        }
+
+        /* --- 控制面板 --- */
+        .controls-panel {
+            /* 修改 1: 使用 fixed 確保面板永遠固定在視窗左上角，不受影片縮放影響 */
+            position: fixed; 
+            top: 20px;
+            left: 20px;
+            width: 160px;
+            padding: 15px;
+            
+            /* 預設隱藏狀態 */
+            opacity: 0.1;
+            background: rgba(20, 20, 20, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0);
+            
+            border-radius: var(--border-radius);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            z-index: 9999; /* 提高層級，確保在最上層 */
+            transition: all var(--transition-speed) ease;
+        }
+
+        /* 顯示規則：1. 滑鼠懸停 2. 程式強制激活 (點擊或初始加載) */
+        .controls-panel:hover, .controls-panel.active-force {
+            opacity: 0.95;
+            background: var(--bg-overlay);
+            backdrop-filter: blur(15px);
+            -webkit-backdrop-filter: blur(15px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+        }
+
+        h1 {
+            margin: 0 0 5px 0;
+            font-size: 11px;
+            color: #aaa;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 700;
+        }
+
+        select, button {
+            width: 100%;
+            padding: 8px;
+            background-color: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            color: var(--text-color);
+            font-size: 12px;
+            outline: none;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        select:hover, button:hover {
+            background-color: rgba(255, 255, 255, 0.15);
+        }
+
+        option { background-color: #222; }
+
+        .info-display {
+            font-size: 10px;
+            color: #888;
+            text-align: center;
+            margin-top: -2px;
+            font-family: monospace;
+        }
+        
+        .info-highlight { color: #4ade80; }
+
+        .zoom-controls {
+            display: flex;
+            justify-content: space-between;
+            gap: 5px;
+        }
+
+        #fullscreen-btn {
+            background-color: var(--primary-color);
+            color: white;
+            font-weight: 600;
+        }
+
+        #fullscreen-btn:hover { background-color: #2563eb; }
+
+        .section-divider {
+            width: 100%;
+            border: 0;
+            border-top: 1px solid rgba(255,255,255,0.15);
+            margin: 2px 0;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="video-container">
+        <video id="webcam" autoplay playsinline></video>
+
+        <div id="controls" class="controls-panel">
+            <div>
+                <h1>選擇鏡頭</h1>
+                <select id="camera-select">
+                    <option value="" disabled selected>載入中...</option>
+                </select>
+            </div>
+
+            <hr class="section-divider">
+
+            <div>
+                <h1>畫質設定</h1>
+                <select id="resolution-select">
+                    <option value="4k" selected>4K (2160p)</option>
+                    <option value="1080p">Full HD (1080p)</option>
+                    <option value="720p">HD (720p)</option>
+                    <option value="480p">SD (480p)</option>
+                </select>
+                <div id="res-display" class="info-display">等待影像...</div>
+            </div>
+
+            <hr class="section-divider">
+
+            <button id="fullscreen-btn" onclick="toggleFullScreen()">
+                <span id="fullscreen-text">全屏顯示</span>
+            </button>
+
+            <div>
+                <h1>數位變焦 (可拖曳)</h1>
+                <div class="zoom-controls">
+                    <button onclick="zoomOut()">-</button>
+                    <button onclick="resetZoom()">1:1</button>
+                    <button onclick="zoomIn()">+</button>
+                </div>
+            </div>
+            <div id="zoom-level-display" class="info-display">1.0x</div>
+        </div>
+    </div>
+
+    <script>
+        const videoContainer = document.getElementById('video-container');
+        const video = document.getElementById('webcam');
+        const cameraSelect = document.getElementById('camera-select');
+        const resolutionSelect = document.getElementById('resolution-select');
+        const fullscreenBtn = document.getElementById('fullscreen-text');
+        const zoomDisplay = document.getElementById('zoom-level-display');
+        const resDisplay = document.getElementById('res-display');
+        const controlsPanel = document.getElementById('controls');
+        
+        let currentStream = null;
+        let currentZoom = 1.0;
+        let translateX = 0;
+        let translateY = 0;
+        let isDragging = false;
+        let startX = 0;
+        let startY = 0;
+        let controlsTimeout;
+
+        const RESOLUTIONS = {
+            '4k': { width: 3840, height: 2160 },
+            '1080p': { width: 1920, height: 1080 },
+            '720p': { width: 1280, height: 720 },
+            '480p': { width: 640, height: 480 }
+        };
+
+        // --- 初始化 ---
+        async function init() {
+            // 修改 3: 頁面加載時，直接顯示控制面板 3秒
+            activateControlsTemporary();
+
+            try {
+                // 修改 4: 初始請求默認使用 4K (3840x2160)
+                // 瀏覽器機制：如果鏡頭不支援 ideal 值，它會自動給出該鏡頭能達到的最高值
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { width: { ideal: 3840 }, height: { ideal: 2160 } } 
+                });
+                handleStreamSuccess(stream);
+
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                
+                cameraSelect.innerHTML = '';
+                videoDevices.forEach((device, index) => {
+                    let label = device.label || `鏡頭 ${index + 1}`;
+                    if (label.length > 18) label = label.substring(0, 16) + "...";
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = label;
+                    cameraSelect.appendChild(option);
+                });
+
+                // 嘗試匹配當前正在使用的鏡頭 ID 到選單
+                const currentTrack = stream.getVideoTracks()[0];
+                const currentDeviceId = currentTrack.getSettings().deviceId;
+                if (currentDeviceId && videoDevices.some(d => d.deviceId === currentDeviceId)) {
+                    cameraSelect.value = currentDeviceId;
+                }
+
+                cameraSelect.onchange = () => restartCamera();
+                resolutionSelect.onchange = () => restartCamera();
+
+            } catch (error) {
+                console.error("Init error:", error);
+                resDisplay.innerText = "無法存取鏡頭";
+                resDisplay.style.color = "red";
+            }
+        }
+
+        async function restartCamera() {
+            if (currentStream) currentStream.getTracks().forEach(track => track.stop());
+            const deviceId = cameraSelect.value;
+            const targetRes = RESOLUTIONS[resolutionSelect.value];
+            const constraints = {
+                video: {
+                    deviceId: deviceId ? { exact: deviceId } : undefined,
+                    width: { ideal: targetRes.width },
+                    height: { ideal: targetRes.height }
+                }
+            };
+            resDisplay.innerText = "切換中...";
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                handleStreamSuccess(stream);
+            } catch (error) { alert("無法切換"); }
+        }
+
+        function handleStreamSuccess(stream) {
+            currentStream = stream;
+            video.srcObject = stream;
+            video.onloadedmetadata = () => {
+                const realWidth = video.videoWidth;
+                const realHeight = video.videoHeight;
+                resDisplay.innerHTML = `實際輸出: <span class="info-highlight">${realWidth} x ${realHeight}</span>`;
+                
+                // 簡單檢查：如果實際高度明顯小於請求高度，提示使用者
+                if (realHeight < RESOLUTIONS[resolutionSelect.value].height * 0.8) {
+                    resDisplay.innerHTML += `<br><span style="color:#ff6b6b">(硬體不支援)</span>`;
+                }
+            };
+        }
+
+        // --- 面板控制邏輯 ---
+        function activateControlsTemporary() {
+            controlsPanel.classList.add('active-force');
+            clearTimeout(controlsTimeout);
+            controlsTimeout = setTimeout(() => {
+                controlsPanel.classList.remove('active-force');
+            }, 3000); // 3秒後消失
+        }
+
+        // 點擊畫面任意處喚醒面板
+        document.addEventListener('mousedown', activateControlsTemporary);
+
+        // --- 縮放與拖曳邏輯 ---
+        function updateTransform() {
+            video.style.transform = `translate(${translateX}px, ${translateY}px) scale(${currentZoom})`;
+            zoomDisplay.innerText = `${currentZoom}x`;
+            
+            if (currentZoom > 1.0) {
+                videoContainer.classList.add('grabbable');
+            } else {
+                videoContainer.classList.remove('grabbable');
+                translateX = 0;
+                translateY = 0;
+                video.style.transform = `translate(0px, 0px) scale(1)`;
+            }
+        }
+
+        function zoomIn() { 
+            if (currentZoom < 5.0) { 
+                currentZoom = parseFloat((currentZoom + 0.2).toFixed(1)); 
+                updateTransform(); 
+            } 
+        }
+
+        function zoomOut() { 
+            if (currentZoom > 1.0) { 
+                currentZoom = parseFloat((currentZoom - 0.2).toFixed(1)); 
+                updateTransform(); 
+            } 
+        }
+
+        function resetZoom() { 
+            currentZoom = 1.0; 
+            translateX = 0; 
+            translateY = 0; 
+            updateTransform(); 
+        }
+
+        // 拖曳事件
+        videoContainer.addEventListener('mousedown', (e) => {
+            if (currentZoom <= 1.0) return;
+            isDragging = true;
+            startX = e.clientX - translateX;
+            startY = e.clientY - translateY;
+            video.classList.add('grabbing');
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            e.preventDefault();
+            translateX = e.clientX - startX;
+            translateY = e.clientY - startY;
+            updateTransform();
+        });
+
+        document.addEventListener('mouseup', () => {
+            isDragging = false;
+            video.classList.remove('grabbing');
+        });
+
+        // 全屏
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(err => console.log(err));
+            } else {
+                if (document.exitFullscreen) document.exitFullscreen();
+            }
+        }
+        document.addEventListener('fullscreenchange', () => {
+            fullscreenBtn.innerText = document.fullscreenElement ? "退出全屏" : "全屏顯示";
+        });
+
+        window.addEventListener('load', init);
+
+    </script>
+</body>
+</html>
